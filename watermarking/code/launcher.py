@@ -16,7 +16,7 @@ import threading
 SCRIPT_DIR       = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR       = os.path.dirname(SCRIPT_DIR)
 ORIGINALS_FOLDER = os.path.join(SCRIPT_DIR, "originals")
-OUTPUT_FOLDER    = os.path.join(SCRIPT_DIR, "output")
+OUTPUT_FOLDER    = os.path.join(PARENT_DIR, "output")   # watermarking/output — matches the engine scripts
 BUYERS_EXCEL     = os.path.join(SCRIPT_DIR, "buyers.xlsx")
 WORD_EXCEL       = os.path.join(SCRIPT_DIR, "word_placeholder_excel.xlsx")
 
