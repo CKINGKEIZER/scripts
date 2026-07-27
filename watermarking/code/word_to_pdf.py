@@ -20,15 +20,13 @@ Supported inputs and the engine used for each:
 Office and Outlook formats require the matching Microsoft Office app installed.
 Images and text/code do not require Office.
 
-Run:  python any_to_pdf.py
+Engine module - GUI is provided by launcher.py Convert to PDF tab.
+CLI:  python word_to_pdf.py <file-or-folder> [more ...]
 """
 
 import os
 import sys
 import tempfile
-import threading
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk, scrolledtext
 
 
 # ── EXTENSION ROUTING ─────────────────────────────────────────────────────────
@@ -332,10 +330,6 @@ def run_batch(files, out_dir, log, progress=None):
     import pythoncom
     pythoncom.CoInitialize()
 
-    needs_office = any(
-        route(os.path.splitext(f)[1]) in ("word", "excel", "ppt", "outlook", "html")
-        for f in files
-    )
     apps = OfficeApps(log)
 
     done = 0
@@ -380,226 +374,27 @@ def run_batch(files, out_dir, log, progress=None):
     return done, skipped, failed
 
 
-# ── GUI ───────────────────────────────────────────────────────────────────────
-
-NAVY = "#0B2340"
-GOLD = "#C19A50"
-BG   = "#F7F7F5"
-CARD = "#FFFFFF"
-SUB  = "#7A8A98"
-TEXT = "#0B1E30"
-LOGB = "#0D1B2A"
-LOGF = "#C8D8E8"
-FF   = "Segoe UI"
-
-
-class App(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("Kumulus Partners — Convert to PDF")
-        self.geometry("860x680")
-        self.minsize(760, 600)
-        self.configure(bg=BG)
-
-        self.items = []      # selected file paths
-        self.out_dir = None  # optional single output folder
-
-        self._build_header()
-        self._build_body()
-
-    # ── header ──
-    def _build_header(self):
-        hdr = tk.Frame(self, bg=NAVY, height=58)
-        hdr.pack(fill="x")
-        hdr.pack_propagate(False)
-        tk.Label(hdr, text="KUMULUS PARTNERS", bg=NAVY, fg="white",
-                 font=(FF, 14, "bold")).pack(side="left", padx=24, anchor="s", pady=(0, 4))
-        tk.Frame(hdr, bg="#2A4A6A", width=1).pack(side="left", fill="y", pady=14, padx=14)
-        tk.Label(hdr, text="Convert to PDF", bg=NAVY, fg="#7A9AB8",
-                 font=(FF, 10)).pack(side="left", anchor="s", pady=(0, 5))
-        tk.Frame(self, bg=GOLD, height=2).pack(fill="x")
-
-    # ── body ──
-    def _build_body(self):
-        body = tk.Frame(self, bg=BG)
-        body.pack(fill="both", expand=True, padx=20, pady=16)
-
-        # source controls
-        src_card = tk.Frame(body, bg=CARD, highlightbackground="#E2E2DC",
-                            highlightthickness=1)
-        src_card.pack(fill="x")
-
-        tk.Label(src_card, text="SOURCE", bg=CARD, fg=SUB,
-                 font=(FF, 7, "bold")).pack(anchor="w", padx=16, pady=(12, 0))
-        tk.Label(src_card,
-                 text="Add individual files or a whole folder. Every supported file becomes a PDF.",
-                 bg=CARD, fg=TEXT, font=(FF, 9)).pack(anchor="w", padx=16, pady=(2, 8))
-
-        btn_row = tk.Frame(src_card, bg=CARD)
-        btn_row.pack(fill="x", padx=16, pady=(0, 8))
-        tk.Button(btn_row, text="Add files", command=self._add_files,
-                  bg=NAVY, fg="white", relief="flat", padx=14, pady=6,
-                  font=(FF, 9, "bold"), cursor="hand2").pack(side="left")
-        tk.Button(btn_row, text="Add folder", command=self._add_folder,
-                  bg=NAVY, fg="white", relief="flat", padx=14, pady=6,
-                  font=(FF, 9, "bold"), cursor="hand2").pack(side="left", padx=(8, 0))
-        tk.Button(btn_row, text="Clear", command=self._clear,
-                  bg="#E2E2DC", fg=TEXT, relief="flat", padx=14, pady=6,
-                  font=(FF, 9), cursor="hand2").pack(side="left", padx=(8, 0))
-
-        self._recurse = tk.BooleanVar(value=True)
-        tk.Checkbutton(btn_row, text="Include subfolders", variable=self._recurse,
-                       bg=CARD, fg=TEXT, activebackground=CARD, selectcolor=CARD,
-                       font=(FF, 9)).pack(side="left", padx=(16, 0))
-
-        self._count_var = tk.StringVar(value="No files selected")
-        tk.Label(src_card, textvariable=self._count_var, bg=CARD, fg=SUB,
-                 font=(FF, 9)).pack(anchor="w", padx=16, pady=(0, 12))
-
-        # output controls
-        out_row = tk.Frame(body, bg=BG)
-        out_row.pack(fill="x", pady=(12, 0))
-        tk.Button(out_row, text="Output folder…", command=self._pick_out,
-                  bg="#E2E2DC", fg=TEXT, relief="flat", padx=12, pady=5,
-                  font=(FF, 9), cursor="hand2").pack(side="left")
-        self._out_var = tk.StringVar(value="PDFs saved next to each source file")
-        tk.Label(out_row, textvariable=self._out_var, bg=BG, fg=SUB,
-                 font=(FF, 9)).pack(side="left", padx=(12, 0))
-
-        # action bar
-        act = tk.Frame(body, bg=BG)
-        act.pack(fill="x", pady=(14, 10))
-        self._run_btn = tk.Button(act, text="Convert to PDF", command=self._run,
-                                  bg=NAVY, fg="white", relief="flat", padx=22, pady=10,
-                                  font=(FF, 10, "bold"), cursor="hand2")
-        self._run_btn.pack(side="left")
-        self._bar = ttk.Progressbar(act, mode="determinate", length=200)
-        self._status = tk.StringVar(value="")
-        tk.Label(act, textvariable=self._status, bg=BG, fg=SUB,
-                 font=(FF, 9)).pack(side="left", padx=14)
-
-        # log
-        log_card = tk.Frame(body, bg=CARD, highlightbackground="#E2E2DC",
-                           highlightthickness=1)
-        log_card.pack(fill="both", expand=True)
-        tk.Label(log_card, text="OUTPUT LOG", bg=CARD, fg=SUB,
-                 font=(FF, 7, "bold")).pack(anchor="w", padx=16, pady=(12, 4))
-        self._log = scrolledtext.ScrolledText(
-            log_card, height=12, font=("Consolas", 9),
-            bg=LOGB, fg=LOGF, relief="flat", state="disabled",
-            insertbackground=LOGF, borderwidth=0)
-        self._log.pack(fill="both", expand=True, padx=16, pady=(0, 14))
-
-    # ── selection handlers ──
-    def _add_files(self):
-        paths = filedialog.askopenfilenames(title="Select files to convert")
-        if paths:
-            self._merge(paths)
-
-    def _add_folder(self):
-        folder = filedialog.askdirectory(title="Select a folder to convert")
-        if folder:
-            self._merge(collect_from_folder(folder, self._recurse.get()))
-
-    def _merge(self, paths):
-        seen = set(self.items)
-        for p in paths:
-            ap = os.path.abspath(p)
-            if os.path.isfile(ap) and ap not in seen:
-                self.items.append(ap)
-                seen.add(ap)
-        self._update_count()
-
-    def _clear(self):
-        self.items = []
-        self._update_count()
-
-    def _update_count(self):
-        n = len(self.items)
-        supported = sum(1 for f in self.items
-                        if os.path.splitext(f)[1].lower() in ALL_KNOWN)
-        self._count_var.set(
-            f"{n} file(s) selected  ·  {supported} directly supported, "
-            f"{n - supported} will be tried as text or skipped")
-
-    def _pick_out(self):
-        folder = filedialog.askdirectory(title="Choose a single output folder")
-        if folder:
-            self.out_dir = folder
-            self._out_var.set(f"Output folder: {folder}")
-        else:
-            self.out_dir = None
-            self._out_var.set("PDFs saved next to each source file")
-
-    # ── run ──
-    def _log_write(self, msg):
-        self._log.configure(state="normal")
-        self._log.insert("end", msg + "\n")
-        self._log.see("end")
-        self._log.configure(state="disabled")
-
-    def _run(self):
-        if not self.items:
-            messagebox.showwarning("No files", "Add files or a folder first.")
-            return
-        self._run_btn.configure(state="disabled")
-        self._bar.pack(side="left", padx=(14, 0))
-        self._bar.configure(maximum=len(self.items), value=0)
-        self._status.set("Converting…")
-        self._log.configure(state="normal")
-        self._log.delete("1.0", "end")
-        self._log.configure(state="disabled")
-
-        threading.Thread(target=self._execute, daemon=True).start()
-
-    def _execute(self):
-        def log(msg):
-            self.after(0, lambda m=msg: self._log_write(m))
-
-        def progress(i, total):
-            self.after(0, lambda: self._bar.configure(value=i))
-
-        files = list(self.items)
-        try:
-            done, skipped, failed = run_batch(files, self.out_dir, log, progress)
-            log("")
-            log(f"  Finished: {done} converted, {skipped} skipped, {len(failed)} failed.")
-            summary = f"{done} converted, {skipped} skipped, {len(failed)} failed."
-            self.after(0, lambda: self._status.set(summary))
-            if failed:
-                self.after(0, lambda: messagebox.showwarning(
-                    "Finished with errors", summary + "\n\nSee the log for details."))
-            else:
-                self.after(0, lambda: messagebox.showinfo("Done", summary))
-        except Exception as e:
-            log(f"  ERROR  {e}")
-            self.after(0, lambda: self._status.set("Error — see log"))
-        finally:
-            self.after(0, lambda: self._run_btn.configure(state="normal"))
-            self.after(0, lambda: self._bar.pack_forget())
-
-
-# ── ENTRY POINT ───────────────────────────────────────────────────────────────
+# ── ENTRY POINT (CLI) ────────────────────────────────
 
 def main():
-    # Console mode if paths are passed on the command line.
+    """Convert files/folders passed on the command line. GUI lives in launcher.py."""
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
-    if args:
-        files = []
-        for a in args:
-            if os.path.isdir(a):
-                files += collect_from_folder(a, recurse=True)
-            elif os.path.isfile(a):
-                files.append(os.path.abspath(a))
-        if not files:
-            print("No files found.")
-            return
-        print(f"Converting {len(files)} file(s)...\n")
-        done, skipped, failed = run_batch(files, None, print)
-        print(f"\nDone. {done} converted, {skipped} skipped, {len(failed)} failed.")
+    if not args:
+        print("Usage: python word_to_pdf.py <file-or-folder> [more ...]")
+        print("Converts Word/Excel/PowerPoint/images/text/Outlook files to PDF.")
         return
-
-    App().mainloop()
+    files = []
+    for a in args:
+        if os.path.isdir(a):
+            files += collect_from_folder(a, recurse=True)
+        elif os.path.isfile(a):
+            files.append(os.path.abspath(a))
+    if not files:
+        print("No files found.")
+        return
+    print("Converting %d file(s)...\n" % len(files))
+    done, skipped, failed = run_batch(files, None, print)
+    print("\nDone. %d converted, %d skipped, %d failed." % (done, skipped, len(failed)))
 
 
 if __name__ == "__main__":

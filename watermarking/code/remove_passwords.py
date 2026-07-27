@@ -1,43 +1,100 @@
+"""
+remove_passwords.py
+-------------------
+Engine module: decrypt owner/user-password-protected PDFs, writing clean
+(unencrypted) copies to an output folder.
+
+Used by:
+  * launcher.py "Remove Passwords" tab -> remove_passwords(files, password, output_folder, ...)
+  * command line                       -> python remove_passwords.py
+        (reads the password from removepass.xlsx cell A1 and decrypts every
+         PDF in the removepass/ subfolder — the original stand-alone flow)
+
+Public function:
+  remove_passwords(files, password, output_folder, log, progress) -> (ok, total)
+"""
+
 import os
-from pypdf import PdfReader, PdfWriter
-import openpyxl
+import sys
 
-BASE   = os.path.dirname(os.path.abspath(__file__))   # watermarking/code/
-PARENT = os.path.dirname(BASE)                         # watermarking/
+# ── CONFIG ────────────────────────────────────────────────────────────────────
+SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR    = os.path.dirname(SCRIPT_DIR)
+OUTPUT_FOLDER = os.path.join(PARENT_DIR, "output")
+# ─────────────────────────────────────────────────────────────────────────────
 
-# removepass.xlsx is in the same folder as this script
-EXCEL_PATH = os.path.join(BASE, "removepass.xlsx")
-wb = openpyxl.load_workbook(EXCEL_PATH)
-ws = wb.active
-OWNER_PASSWORD = ws["A1"].value
-print(f"Password loaded from Excel.")
 
-INPUT_FOLDER  = os.path.join(BASE,   "removepass")
-OUTPUT_FOLDER = os.path.join(PARENT, "output")
+def remove_passwords(files, password, output_folder=OUTPUT_FOLDER,
+                     log=None, progress=None):
+    """
+    Decrypt a list of PDF file paths using `password` and write clean copies
+    to output_folder.
 
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    Returns (ok, total).
+    """
+    from pypdf import PdfReader, PdfWriter
 
-files = [f for f in os.listdir(INPUT_FOLDER) if f.lower().endswith(".pdf")]
-print(f"Found {len(files)} PDFs to process.")
+    log = log or print
+    os.makedirs(output_folder, exist_ok=True)
+    total = len(files)
+    ok = 0
 
-for filename in files:
-    input_path = os.path.join(INPUT_FOLDER, filename)
-    output_path = os.path.join(OUTPUT_FOLDER, filename)
+    for i, path in enumerate(files, 1):
+        fname = os.path.basename(path)
+        try:
+            reader = PdfReader(path)
+            if reader.is_encrypted and reader.decrypt(password) == 0:
+                log(f"  ✗  {fname}  —  wrong password")
+                if progress:
+                    progress(i, total)
+                continue
+            writer = PdfWriter()
+            writer.clone_reader_document_root(reader)
+            with open(os.path.join(output_folder, fname), "wb") as f:
+                writer.write(f)
+            log(f"  ✓  {fname}")
+            ok += 1
+        except Exception as e:
+            log(f"  ✗  {fname}  —  {e}")
 
-    reader = PdfReader(input_path)
+        if progress:
+            progress(i, total)
 
-    if reader.is_encrypted:
-        result = reader.decrypt(OWNER_PASSWORD)
-        if result == 0:
-            print(f"SKIP (wrong password): {filename}")
-            continue
+    log("")
+    log(f"  Finished: {ok}/{total} files written to output/")
+    return ok, total
 
-    writer = PdfWriter()
-    writer.clone_reader_document_root(reader)
 
-    with open(output_path, "wb") as f:
-        writer.write(f)
+# ── CLI: original Excel-driven batch flow ─────────────────────────────────────
 
-    print(f"Done: {filename}")
+def _cli():
+    """
+    Stand-alone flow: read the owner password from removepass.xlsx (cell A1)
+    and decrypt every PDF in the removepass/ subfolder.
+    """
+    import openpyxl
 
-print(f"\nAll files written to '{OUTPUT_FOLDER}/'.")
+    excel_path = os.path.join(SCRIPT_DIR, "removepass.xlsx")
+    input_folder = os.path.join(SCRIPT_DIR, "removepass")
+
+    if not os.path.isfile(excel_path):
+        print(f"ERROR: {excel_path} not found.")
+        sys.exit(1)
+    if not os.path.isdir(input_folder):
+        print(f"ERROR: input folder not found: {input_folder}")
+        sys.exit(1)
+
+    wb = openpyxl.load_workbook(excel_path)
+    password = wb.active["A1"].value
+    wb.close()
+    print("Password loaded from Excel.")
+
+    files = [os.path.join(input_folder, f)
+             for f in os.listdir(input_folder) if f.lower().endswith(".pdf")]
+    print(f"Found {len(files)} PDFs to process.")
+    remove_passwords(files, password, OUTPUT_FOLDER)
+    print(f"\nAll files written to '{OUTPUT_FOLDER}/'.")
+
+
+if __name__ == "__main__":
+    _cli()
