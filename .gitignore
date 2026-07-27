@@ -1,0 +1,21 @@
+# ── Python ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ── Office lock / temp files ─────────────────────────────
+~$*
+*.tmp
+
+# ── Runtime folders ──────────────────────────────────────
+# Generated PDFs/docs land here at runtime — keep the folder, ignore contents
+watermarking/output/*
+!watermarking/output/.gitkeep
+
+# Source documents dropped in for a run are confidential — never commit them
+watermarking/code/originals/*
+!watermarking/code/originals/.gitkeep
+
+# A stray output/ folder next to the scripts used to be created by a path bug.
+# Ignore it in case an old build recreates it.
+watermarking/code/output/
