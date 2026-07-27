@@ -21,6 +21,25 @@ BUYERS_EXCEL     = os.path.join(SCRIPT_DIR, "buyers.xlsx")
 WORD_EXCEL       = os.path.join(SCRIPT_DIR, "word_placeholder_excel.xlsx")
 
 
+# ── ENGINE LOADER ─────────────────────────────────────────────────────────────
+# Each tool's logic lives in its own module next to this file (add_passwords,
+# remove_passwords, create_folders, word_to_pdf, fill_template, generate_teasers).
+# The GUI stays thin and just calls into them.
+
+def _load_engine(module_name):
+    """Import (and hot-reload) an engine module that sits next to launcher.py."""
+    if SCRIPT_DIR not in sys.path:
+        sys.path.insert(0, SCRIPT_DIR)
+    import importlib
+    mod = importlib.import_module(module_name)
+    importlib.reload(mod)
+    return mod
+
+
+def _load_create_folders():
+    return _load_engine("create_folders")
+
+
 # ── DEPENDENCY CHECK ──────────────────────────────────────────────────────────
 
 def check_and_install_packages():
@@ -257,7 +276,7 @@ def _build_app(base_class, has_dnd):
                 ("folders",      "Create Folders"),
                 ("filltemplate", "Fill Template"),
                 ("addpass",      "Add Passwords"),
-                ("wordtopdf",    "Word to PDF"),
+                ("wordtopdf",    "Convert to PDF"),
             ]:
                 col = tk.Frame(nav, bg=C["nav_bg"])
                 col.pack(side="left")
@@ -911,37 +930,23 @@ def _build_app(base_class, has_dnd):
                 self.after(0, lambda m=msg: self._log_write(self._rp_log, m))
 
             try:
-                from pypdf import PdfReader, PdfWriter
-                os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-                ok = 0
+                if SCRIPT_DIR not in sys.path:
+                    sys.path.insert(0, SCRIPT_DIR)
+                import remove_passwords
+                import importlib
+                importlib.reload(remove_passwords)
 
-                for path in files:
-                    fname = os.path.basename(path)
-                    try:
-                        reader = PdfReader(path)
-                        if reader.decrypt(pw) == 0:
-                            log(f"  ✗  {fname}  —  wrong password")
-                            continue
-                        writer = PdfWriter()
-                        writer.clone_reader_document_root(reader)
-                        with open(os.path.join(OUTPUT_FOLDER, fname), "wb") as f:
-                            writer.write(f)
-                        log(f"  ✓  {fname}")
-                        ok += 1
-                    except Exception as e:
-                        log(f"  ✗  {fname}  —  {e}")
+                ok, total = remove_passwords.remove_passwords(
+                    files, pw, OUTPUT_FOLDER, log=log)
 
-                log("")
-                log(f"  Finished: {ok}/{len(files)} files written to output/")
-
-                if ok == len(files):
+                if ok == total:
                     self.after(0, lambda: self._rp_status.set(f"✓  {ok} file(s) done"))
                     self.after(0, lambda: messagebox.showinfo(
                         "Done", f"{ok} file(s) decrypted.\n\nOutput folder:  output/"
                     ))
                 else:
                     self.after(0, lambda: self._rp_status.set(
-                        f"{ok}/{len(files)} done — check log"))
+                        f"{ok}/{total} done — check log"))
 
             except Exception as e:
                 log(f"  ERROR  {e}")
@@ -959,49 +964,13 @@ def _build_app(base_class, has_dnd):
 
         @staticmethod
         def _cf_parse(raw_text):
-            """
-            Parse a numbered outline into (depth, folder_name) pairs.
-            Depth = number of dots in the numeric prefix.
-              "1 Juridisch"       -> depth 0
-              "1.1. Vennootschap" -> depth 1
-              "1.1.1. Structuur"  -> depth 2
-            Lines without a leading numeric prefix are skipped.
-            Characters Windows forbids in folder names are replaced with '-'.
-            """
-            import re
-            pattern = re.compile(r'^(\d+(?:\.\d+)*\.?)\s+(.+)')
-            results = []
-            for raw_line in raw_text.splitlines():
-                # Collapse tabs (Excel multi-column paste) and extra spaces
-                # into a single space before any other processing.
-                line = re.sub(r'[\t ]+', ' ', raw_line).strip()
-                if not line:
-                    continue
-                m = pattern.match(line)
-                if not m:
-                    continue
-                numeric_part = m.group(1).rstrip(".")
-                # Rebuild label from captured groups so no stray whitespace survives
-                label = f"{m.group(1).rstrip('.')}. {m.group(2).strip()}"
-                label = re.sub(r'[<>:"/\\|?*]', '-', label).strip()
-                # Windows forbids names ending with period or space
-                label = label.rstrip('. ')
-                depth = numeric_part.count(".")
-                results.append((depth, label))
-            return results
+            """Parse a numbered outline into (depth, name) pairs (via engine)."""
+            return _load_create_folders().parse_structure(raw_text)
 
         @staticmethod
         def _cf_build_paths(entries):
             """Convert (depth, name) pairs to absolute folder paths under OUTPUT_FOLDER."""
-            stack = {}
-            paths = []
-            for depth, name in entries:
-                stack[depth] = name
-                for k in [k for k in stack if k > depth]:
-                    del stack[k]
-                parts = [stack[d] for d in sorted(stack)]
-                paths.append(os.path.join(OUTPUT_FOLDER, *parts))
-            return paths
+            return _load_create_folders().build_folder_paths(entries, OUTPUT_FOLDER)
 
         @staticmethod
         def _cf_preview(entries):
@@ -1139,56 +1108,13 @@ def _build_app(base_class, has_dnd):
                 self.after(0, lambda m=msg: self._log_write(self._cf_log, m))
 
             try:
-                os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-                created = 0
-                skipped = 0
-                for path in paths:
-                    rel = os.path.relpath(path, os.path.dirname(OUTPUT_FOLDER))
-                    if os.path.isdir(path):
-                        log(f"  EXISTS   {rel}")
-                        skipped += 1
-                    else:
-                        os.makedirs(path, exist_ok=True)
-                        log(f"  CREATED  {rel}")
-                        created += 1
-
-                # Save structure to Excel in code/ for reference / editing
-                try:
-                    import openpyxl
-                    from openpyxl.styles import Font, PatternFill, Alignment
-                    wb = openpyxl.Workbook()
-                    ws = wb.active
-                    ws.title = "Folder Structure"
-                    ws.column_dimensions["A"].width = 120
-
-                    LEVEL_COLOURS = ["#0B2340", "#1A4A7A", "#2E6DA4", "#4A90C4"]
-                    LEVEL_SIZES   = [12, 11, 10, 9]
-
-                    for row_idx, (depth, label) in enumerate(entries, 1):
-                        cell = ws.cell(row=row_idx, column=1, value=label)
-                        hex_col = LEVEL_COLOURS[min(depth, len(LEVEL_COLOURS) - 1)]
-                        font_size = LEVEL_SIZES[min(depth, len(LEVEL_SIZES) - 1)]
-                        cell.font = Font(
-                            name="Segoe UI", size=font_size, bold=(depth == 0),
-                            color="FFFFFF"
-                        )
-                        cell.fill = PatternFill(
-                            fill_type="solid",
-                            fgColor=hex_col.lstrip("#")
-                        )
-                        cell.alignment = Alignment(
-                            indent=depth * 2, vertical="center"
-                        )
-                        ws.row_dimensions[row_idx].height = 18
-
-                    excel_path = os.path.join(SCRIPT_DIR, "folder_structure.xlsx")
-                    wb.save(excel_path)
-                    log(f"\n  Structure saved  →  code/folder_structure.xlsx")
-                except Exception as xe:
-                    log(f"\n  WARNING: could not save Excel  —  {xe}")
-
-                log("")
-                log(f"  Done.  {created} created,  {skipped} already existed.")
+                cf = _load_create_folders()
+                created, skipped = cf.create_folders(
+                    paths, entries,
+                    output_folder=OUTPUT_FOLDER,
+                    excel_dir=SCRIPT_DIR,
+                    log=log,
+                )
                 self.after(0, lambda: self._cf_status.set(
                     f"✓  {created} folder(s) created"))
                 if created:
@@ -1599,45 +1525,14 @@ def _build_app(base_class, has_dnd):
                 self.after(0, lambda m=msg: self._log_write(self._ap_log, m))
 
             try:
-                from pypdf import PdfReader, PdfWriter
-                from pypdf.constants import UserAccessPermissions
+                if SCRIPT_DIR not in sys.path:
+                    sys.path.insert(0, SCRIPT_DIR)
+                import add_passwords
+                import importlib
+                importlib.reload(add_passwords)
 
-                PERMS = (
-                    UserAccessPermissions.PRINT
-                    | UserAccessPermissions.PRINT_TO_REPRESENTATION
-                    | UserAccessPermissions.EXTRACT_TEXT_AND_GRAPHICS
-                )
-
-                os.makedirs(output_folder, exist_ok=True)
-                ok = 0
-                total = len(files)
-
-                for i, path in enumerate(files, 1):
-                    fname = os.path.basename(path)
-                    try:
-                        reader = PdfReader(path)
-                        writer = PdfWriter()
-
-                        for page in reader.pages:
-                            writer.add_page(page)
-
-                        writer.encrypt(
-                            user_password="",
-                            owner_password=pw,
-                            algorithm="AES-256",
-                            permissions_flag=PERMS,
-                        )
-
-                        with open(os.path.join(output_folder, fname), "wb") as f:
-                            writer.write(f)
-
-                        log(f"  [{i}/{total}] ✓  {fname}")
-                        ok += 1
-                    except Exception as e:
-                        log(f"  [{i}/{total}] ✗  {fname}  —  {e}")
-
-                log("")
-                log(f"  Finished: {ok}/{total} files written to output/")
+                ok, total = add_passwords.protect_files(
+                    files, pw, output_folder, log=log)
 
                 if ok == total:
                     self.after(0, lambda: self._ap_status.set(f"✓  {ok} file(s) done"))
@@ -1669,8 +1564,8 @@ def _build_app(base_class, has_dnd):
 
             card_files = self._card(row1)
             card_files.pack(side="left", fill="both", expand=True)
-            self._card_header(card_files, "Word Files",
-                              "Select individual .docx / .doc files or an entire folder")
+            self._card_header(card_files, "Files to convert",
+                              "Word, Excel, PowerPoint, images, text or Outlook emails — files or a whole folder")
 
             drop_wrapper = tk.Frame(card_files, bg=C["panel"], height=160)
             drop_wrapper.pack(fill="x", padx=16, pady=(10, 0))
@@ -1678,7 +1573,7 @@ def _build_app(base_class, has_dnd):
 
             self._wp_files = []
             self._wp_files_var = tk.StringVar(
-                value="Drop Word files here  ·  or use Browse below")
+                value="Drop files here  ·  or use Browse below")
             wp_zone, self._wp_zone_lbl = self._dropzone(
                 drop_wrapper, "📄", self._wp_files_var, self._wp_browse_files
             )
@@ -1726,33 +1621,31 @@ def _build_app(base_class, has_dnd):
             import re
             parts = re.findall(r'\{([^}]+)\}|(\S+)', event.data.strip())
             flat  = [p[0] or p[1] for p in parts]
-            docs  = [p for p in flat if p.lower().endswith((".docx", ".doc"))]
-            if docs:
-                self._wp_set_files(docs)
+            files = [p for p in flat if os.path.isfile(p)]
+            if files:
+                self._wp_set_files(files)
             else:
-                messagebox.showwarning("No Word files",
-                                       "No .docx or .doc files detected.")
+                messagebox.showwarning("No files", "No files detected.")
 
         def _wp_browse_files(self, event=None):
             paths = filedialog.askopenfilenames(
-                title="Select Word files to convert",
-                filetypes=[("Word documents", "*.docx *.doc")]
+                title="Select files to convert",
+                filetypes=[("All files", "*.*")]
             )
             if paths:
                 self._wp_set_files(list(paths))
 
         def _wp_browse_folder(self):
-            folder = filedialog.askdirectory(title="Select folder with Word files")
+            folder = filedialog.askdirectory(title="Select folder to convert")
             if not folder:
                 return
-            docs = [os.path.join(folder, f)
-                    for f in os.listdir(folder)
-                    if f.lower().endswith((".docx", ".doc"))]
-            if not docs:
-                messagebox.showwarning("No Word files",
-                                       "No .docx or .doc files found in that folder.")
+            files = [os.path.join(folder, f)
+                     for f in os.listdir(folder)
+                     if os.path.isfile(os.path.join(folder, f))]
+            if not files:
+                messagebox.showwarning("Empty folder", "No files found in that folder.")
                 return
-            self._wp_set_files(docs)
+            self._wp_set_files(files)
 
         def _wp_set_files(self, paths):
             self._wp_files = paths
@@ -1784,71 +1677,33 @@ def _build_app(base_class, has_dnd):
             def log(msg):
                 self.after(0, lambda m=msg: self._log_write(self._wp_log, m))
 
-            word = None
+            def progress(i, total):
+                pass  # indeterminate bar; per-file lines already show progress
+
             try:
-                try:
-                    import win32com.client
-                    import pythoncom
-                except ImportError:
-                    log("  ERROR  pywin32 is not installed. Run: pip install pywin32")
-                    self.after(0, lambda: self._wp_status.set("Error — see log"))
-                    return
-
-                pythoncom.CoInitialize()
-
-                try:
-                    word = win32com.client.DispatchEx("Word.Application")
-                    word.Visible = False
-                    word.DisplayAlerts = 0
-                except Exception as e:
-                    log(f"  ERROR  Could not start Microsoft Word. Is Word installed?  {e}")
-                    self.after(0, lambda: self._wp_status.set("Error — see log"))
-                    return
-
-                ok = 0
-                total = len(files)
-
-                for i, src in enumerate(files, 1):
-                    src_abs = os.path.abspath(src)
-                    base, _ = os.path.splitext(src_abs)
-                    pdf_abs = base + ".pdf"
-                    fname = os.path.basename(src_abs)
-                    try:
-                        doc = word.Documents.Open(src_abs)
-                        doc.SaveAs(pdf_abs, FileFormat=17)  # 17 = wdFormatPDF
-                        doc.Close(False)
-                        log(f"  [{i}/{total}] ✓  {fname}  →  {os.path.basename(pdf_abs)}")
-                        ok += 1
-                    except Exception as e:
-                        log(f"  [{i}/{total}] ✗  {fname}  —  {e}")
-
+                w2p = _load_engine("word_to_pdf")
+                # out_dir=None -> each PDF is written next to its source file.
+                done, skipped, failed = w2p.run_batch(files, None, log, progress)
                 log("")
-                log(f"  Finished: {ok}/{total} file(s) converted.")
+                log(f"  Finished: {done} converted, {skipped} skipped, {len(failed)} failed.")
+                summary = f"{done} converted, {skipped} skipped, {len(failed)} failed."
 
-                if ok == total:
-                    self.after(0, lambda: self._wp_status.set(f"✓  {ok} file(s) done"))
+                if failed:
+                    self.after(0, lambda: self._wp_status.set(summary))
+                    self.after(0, lambda: messagebox.showwarning(
+                        "Finished with errors",
+                        summary + "\n\nSee the log for details."))
+                else:
+                    self.after(0, lambda: self._wp_status.set(f"✓  {done} file(s) done"))
                     self.after(0, lambda: messagebox.showinfo(
                         "Done",
-                        f"{ok} file(s) converted.\n\n"
-                        "Each PDF is saved next to its Word file."
-                    ))
-                else:
-                    self.after(0, lambda: self._wp_status.set(
-                        f"{ok}/{total} done — check log"))
+                        f"{done} file(s) converted.\n\n"
+                        "Each PDF is saved next to its source file."))
 
             except Exception as e:
                 log(f"  ERROR  {e}")
                 self.after(0, lambda: self._wp_status.set("Error — see log"))
             finally:
-                if word:
-                    try:
-                        word.Quit()
-                    except Exception:
-                        pass
-                try:
-                    pythoncom.CoUninitialize()
-                except Exception:
-                    pass
                 self.after(0, lambda: self._wp_run_btn.configure(state="normal"))
                 self.after(0, lambda: self._wp_bar.stop())
                 self.after(0, lambda: self._wp_bar.pack_forget())
