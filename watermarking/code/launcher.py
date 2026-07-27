@@ -1589,6 +1589,20 @@ def _build_app(base_class, has_dnd):
                        style="Ghost.TButton",
                        command=self._wp_browse_folder).pack(side="left")
 
+            # ── Options row ──
+            opt_row = tk.Frame(frame, bg=C["bg"])
+            opt_row.pack(fill="x", pady=(0, 10))
+            self._wp_strip_index = tk.BooleanVar(value=True)
+            tk.Checkbutton(
+                opt_row,
+                text="Remove dataroom index numbers from names   "
+                     "( 1.1.8.2.12 GI-GM handelshuur af 2018.pdf  →  GI-GM handelshuur af 2018.pdf )",
+                variable=self._wp_strip_index,
+                bg=C["bg"], fg=C["text"],
+                activebackground=C["bg"], activeforeground=C["text"],
+                selectcolor=C["panel"], font=(FF, 9), cursor="hand2",
+            ).pack(anchor="w")
+
             # ── Row 2: action bar ──
             row2 = tk.Frame(frame, bg=C["bg"])
             row2.pack(fill="x", pady=(0, 14))
@@ -1669,6 +1683,7 @@ def _build_app(base_class, has_dnd):
             # When a whole folder was chosen, write the PDFs into a clean
             # "pdf" subfolder of it. For loose files, keep them next to source.
             out_dir = os.path.join(self._wp_folder, "pdf") if self._wp_folder else None
+            strip_index = self._wp_strip_index.get()
 
             self._wp_run_btn.configure(state="disabled")
             self._wp_bar.pack(side="left", padx=(14, 0))
@@ -1680,11 +1695,11 @@ def _build_app(base_class, has_dnd):
 
             threading.Thread(
                 target=self._wp_execute,
-                args=(list(self._wp_files), out_dir),
+                args=(list(self._wp_files), out_dir, strip_index),
                 daemon=True
             ).start()
 
-        def _wp_execute(self, files, out_dir):
+        def _wp_execute(self, files, out_dir, strip_index):
             def log(msg):
                 self.after(0, lambda m=msg: self._log_write(self._wp_log, m))
 
@@ -1696,7 +1711,10 @@ def _build_app(base_class, has_dnd):
                 # out_dir set -> a "pdf" subfolder; None -> next to each source file.
                 if out_dir:
                     log(f"  Output folder: {out_dir}")
-                done, skipped, failed = w2p.run_batch(files, out_dir, log, progress)
+                if strip_index:
+                    log("  Removing dataroom index numbers from output names")
+                done, skipped, failed = w2p.run_batch(
+                    files, out_dir, log, progress, strip_index=strip_index)
                 log("")
                 log(f"  Finished: {done} converted, {skipped} skipped, {len(failed)} failed.")
                 summary = f"{done} converted, {skipped} skipped, {len(failed)} failed."

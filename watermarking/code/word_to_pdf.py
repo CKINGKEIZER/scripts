@@ -25,6 +25,7 @@ CLI:  python word_to_pdf.py <file-or-folder> [more ...]
 """
 
 import os
+import re
 import sys
 import tempfile
 
@@ -313,18 +314,46 @@ def collect_from_folder(folder, recurse):
     return files
 
 
-def pdf_output_path(src, out_dir):
-    base = os.path.splitext(os.path.basename(src))[0] + ".pdf"
+# A dataroom index is a dotted, MULTI-level number at the very start of the
+# name, followed by whitespace:  "1.1.8.2.12 GI-GM ..."  ->  "GI-GM ...".
+# A lone leading number ("2018 Report.pdf") is NOT treated as an index — it
+# could be a year — so when unsure we leave the name untouched.
+_INDEX_RE = re.compile(r'^\d+(?:\.\d+)+\.?\s+(.+)$')
+
+
+def strip_dataroom_index(name):
+    """
+    Remove a leading dotted dataroom index from a filename.
+    Returns the cleaned name, or the original name when no confident
+    multi-level index prefix is present.
+    """
+    m = _INDEX_RE.match(name)
+    if m:
+        cleaned = m.group(1).strip()
+        if cleaned:
+            return cleaned
+    return name
+
+
+def pdf_output_path(src, out_dir, strip_index=False):
+    fname = os.path.basename(src)
+    if strip_index:
+        fname = strip_dataroom_index(fname)
+    base = os.path.splitext(fname)[0] + ".pdf"
     if out_dir:
         return os.path.join(out_dir, base)
-    return os.path.splitext(os.path.abspath(src))[0] + ".pdf"
+    return os.path.join(os.path.dirname(os.path.abspath(src)), base)
 
 
 # ── BATCH RUNNER ──────────────────────────────────────────────────────────────
 
-def run_batch(files, out_dir, log, progress=None):
+def run_batch(files, out_dir, log, progress=None, strip_index=False):
     """
     Convert every file in `files`. Office apps are opened once and reused.
+
+    strip_index : when True, a leading dataroom index number is removed from
+                  each output filename ("1.1.8.2.12 Name.pdf" -> "Name.pdf").
+
     Returns (done, skipped, failed_list).
     """
     import pythoncom
@@ -336,6 +365,20 @@ def run_batch(files, out_dir, log, progress=None):
     skipped = 0
     failed = []
     total = len(files)
+    used = set()   # output paths already claimed this run (never clobber within a batch)
+
+    def claim(dest):
+        """Return a destination that doesn't collide with one already made this run."""
+        if dest not in used:
+            used.add(dest)
+            return dest
+        base, ext = os.path.splitext(dest)
+        n = 2
+        while f"{base} ({n}){ext}" in used:
+            n += 1
+        cand = f"{base} ({n}){ext}"
+        used.add(cand)
+        return cand
 
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
@@ -351,18 +394,19 @@ def run_batch(files, out_dir, log, progress=None):
                     skipped += 1
                     if progress: progress(i, total)
                     continue
-                # Folder run: move the existing PDF into the pdf/ subfolder too,
-                # so the source folder ends up clean. Never overwrite.
-                dest = pdf_output_path(src, out_dir)
+                # Folder run: move the existing PDF into the pdf/ subfolder too
+                # (with its index stripped), so the source folder ends up clean.
+                dest = pdf_output_path(src, out_dir, strip_index)
                 if os.path.abspath(src) == os.path.abspath(dest):
                     log(f"  [{i}/{total}] already in output  {name}")
                     skipped += 1
-                elif os.path.exists(dest):
+                elif dest in used or os.path.exists(dest):
                     log(f"  [{i}/{total}] skip (name already in pdf/)  {name}")
                     skipped += 1
                 else:
                     try:
                         import shutil
+                        used.add(dest)
                         shutil.move(src, dest)
                         log(f"  [{i}/{total}] moved (already PDF)  {name}  ->  pdf/{os.path.basename(dest)}")
                         done += 1
@@ -372,16 +416,18 @@ def run_batch(files, out_dir, log, progress=None):
                 if progress: progress(i, total)
                 continue
 
-            pdf = pdf_output_path(src, out_dir)
+            pdf = claim(pdf_output_path(src, out_dir, strip_index))
             try:
                 ok = convert_one(apps, src, pdf, log)
                 if ok:
                     log(f"  [{i}/{total}] ok    {name}  ->  {os.path.basename(pdf)}")
                     done += 1
                 else:
+                    used.discard(pdf)
                     log(f"  [{i}/{total}] skip (unsupported)  {name}")
                     skipped += 1
             except Exception as e:
+                used.discard(pdf)
                 log(f"  [{i}/{total}] FAIL  {name}  :  {e}")
                 failed.append((name, str(e)))
             if progress:
@@ -401,9 +447,11 @@ def run_batch(files, out_dir, log, progress=None):
 def main():
     """Convert files/folders passed on the command line. GUI lives in launcher.py."""
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    strip_index = "--strip-index" in sys.argv
     if not args:
-        print("Usage: python word_to_pdf.py <file-or-folder> [more ...]")
+        print("Usage: python word_to_pdf.py [--strip-index] <file-or-folder> [more ...]")
         print("Converts Word/Excel/PowerPoint/images/text/Outlook files to PDF.")
+        print("  --strip-index  remove leading dataroom index numbers from output names")
         return
     files = []
     for a in args:
@@ -415,7 +463,7 @@ def main():
         print("No files found.")
         return
     print("Converting %d file(s)...\n" % len(files))
-    done, skipped, failed = run_batch(files, None, print)
+    done, skipped, failed = run_batch(files, None, print, strip_index=strip_index)
     print("\nDone. %d converted, %d skipped, %d failed." % (done, skipped, len(failed)))
 
 
