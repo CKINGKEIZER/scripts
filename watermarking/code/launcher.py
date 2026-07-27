@@ -1572,6 +1572,7 @@ def _build_app(base_class, has_dnd):
             drop_wrapper.pack_propagate(False)
 
             self._wp_files = []
+            self._wp_folder = None   # set when a whole folder is chosen
             self._wp_files_var = tk.StringVar(
                 value="Drop files here  ·  or use Browse below")
             wp_zone, self._wp_zone_lbl = self._dropzone(
@@ -1645,19 +1646,29 @@ def _build_app(base_class, has_dnd):
             if not files:
                 messagebox.showwarning("Empty folder", "No files found in that folder.")
                 return
-            self._wp_set_files(files)
+            self._wp_set_files(files, folder=folder)
 
-        def _wp_set_files(self, paths):
-            self._wp_files = paths
-            self._wp_files_var.set(f"✓  {len(paths)} file(s) selected")
+        def _wp_set_files(self, paths, folder=None):
+            self._wp_files  = paths
+            self._wp_folder = folder
+            if folder:
+                self._wp_files_var.set(
+                    f"✓  {len(paths)} file(s)  ·  PDFs → {os.path.basename(folder)}\\pdf")
+            else:
+                self._wp_files_var.set(
+                    f"✓  {len(paths)} file(s)  ·  PDFs saved next to each source")
             self._wp_zone_lbl.configure(fg=C["ok"])
 
         # ── Word to PDF: run ──────────────────────────────────────────────
 
         def _wp_run(self):
             if not self._wp_files:
-                messagebox.showwarning("No files", "Select at least one Word file.")
+                messagebox.showwarning("No files", "Select at least one file.")
                 return
+
+            # When a whole folder was chosen, write the PDFs into a clean
+            # "pdf" subfolder of it. For loose files, keep them next to source.
+            out_dir = os.path.join(self._wp_folder, "pdf") if self._wp_folder else None
 
             self._wp_run_btn.configure(state="disabled")
             self._wp_bar.pack(side="left", padx=(14, 0))
@@ -1669,11 +1680,11 @@ def _build_app(base_class, has_dnd):
 
             threading.Thread(
                 target=self._wp_execute,
-                args=(list(self._wp_files),),
+                args=(list(self._wp_files), out_dir),
                 daemon=True
             ).start()
 
-        def _wp_execute(self, files):
+        def _wp_execute(self, files, out_dir):
             def log(msg):
                 self.after(0, lambda m=msg: self._log_write(self._wp_log, m))
 
@@ -1682,11 +1693,15 @@ def _build_app(base_class, has_dnd):
 
             try:
                 w2p = _load_engine("word_to_pdf")
-                # out_dir=None -> each PDF is written next to its source file.
-                done, skipped, failed = w2p.run_batch(files, None, log, progress)
+                # out_dir set -> a "pdf" subfolder; None -> next to each source file.
+                if out_dir:
+                    log(f"  Output folder: {out_dir}")
+                done, skipped, failed = w2p.run_batch(files, out_dir, log, progress)
                 log("")
                 log(f"  Finished: {done} converted, {skipped} skipped, {len(failed)} failed.")
                 summary = f"{done} converted, {skipped} skipped, {len(failed)} failed."
+                where = ("in the 'pdf' subfolder"
+                         if out_dir else "next to each source file")
 
                 if failed:
                     self.after(0, lambda: self._wp_status.set(summary))
@@ -1695,10 +1710,9 @@ def _build_app(base_class, has_dnd):
                         summary + "\n\nSee the log for details."))
                 else:
                     self.after(0, lambda: self._wp_status.set(f"✓  {done} file(s) done"))
-                    self.after(0, lambda: messagebox.showinfo(
+                    self.after(0, lambda w=where: messagebox.showinfo(
                         "Done",
-                        f"{done} file(s) converted.\n\n"
-                        "Each PDF is saved next to its source file."))
+                        f"{done} file(s) converted.\n\nEach PDF is saved {w}."))
 
             except Exception as e:
                 log(f"  ERROR  {e}")
