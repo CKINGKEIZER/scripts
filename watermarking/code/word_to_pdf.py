@@ -345,8 +345,30 @@ def run_batch(files, out_dir, log, progress=None):
             name = os.path.basename(src)
             ext = os.path.splitext(src)[1].lower()
             if ext == ".pdf":
-                log(f"  [{i}/{total}] skip (already PDF)  {name}")
-                skipped += 1
+                # No output folder (loose files) -> nothing to tidy, leave it.
+                if not out_dir:
+                    log(f"  [{i}/{total}] skip (already PDF)  {name}")
+                    skipped += 1
+                    if progress: progress(i, total)
+                    continue
+                # Folder run: move the existing PDF into the pdf/ subfolder too,
+                # so the source folder ends up clean. Never overwrite.
+                dest = pdf_output_path(src, out_dir)
+                if os.path.abspath(src) == os.path.abspath(dest):
+                    log(f"  [{i}/{total}] already in output  {name}")
+                    skipped += 1
+                elif os.path.exists(dest):
+                    log(f"  [{i}/{total}] skip (name already in pdf/)  {name}")
+                    skipped += 1
+                else:
+                    try:
+                        import shutil
+                        shutil.move(src, dest)
+                        log(f"  [{i}/{total}] moved (already PDF)  {name}  ->  pdf/{os.path.basename(dest)}")
+                        done += 1
+                    except Exception as e:
+                        log(f"  [{i}/{total}] FAIL  {name}  :  {e}")
+                        failed.append((name, str(e)))
                 if progress: progress(i, total)
                 continue
 
