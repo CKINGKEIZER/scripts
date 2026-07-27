@@ -7,6 +7,9 @@ __pycache__/
 ~$*
 *.tmp
 
+# ── Remembered UI settings (per-machine) ─────────────────
+watermarking/code/settings.json
+
 # ── Runtime folders ──────────────────────────────────────
 # Generated PDFs/docs land here at runtime — keep the folder, ignore contents
 watermarking/output/*

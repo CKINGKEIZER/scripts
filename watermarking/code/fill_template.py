@@ -13,7 +13,11 @@ Empty cells are allowed and will be replaced with an empty string.
 """
 
 import os
+import re
 import sys
+
+# A placeholder tag in the template looks like [name] on a single line.
+_PLACEHOLDER_RE = re.compile(r'\[([^\[\]\r\n]+)\]')
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
@@ -64,7 +68,7 @@ def update_excel_headers(placeholder_names, log=print):
     ws.append(["File name"] + placeholder_names)
     wb.save(EXCEL_PATH)
     log(f"Excel updated — columns: File name, {', '.join(placeholder_names)}")
-    log(f"Fill in your data starting from row 2, then press Run.")
+    log("Fill in your data starting from row 2, then press Run.")
     return True
 
 
@@ -135,6 +139,58 @@ def read_excel(log=print):
 
 
 # ── WORD ──────────────────────────────────────────────────────────────────────
+
+def detect_placeholders(template_path):
+    """
+    Scan a .docx template and return the unique [placeholder] names it contains,
+    in first-seen order. The reserved 'File name' column is excluded (it is
+    added automatically as the output-name column).
+
+    Runs are joined per paragraph first, so tags Word split across runs
+    (after spell-check or mid-word formatting) are still detected.
+    """
+    import shutil
+    import tempfile
+    from docx import Document
+
+    # python-docx treats [ ] as zip glob wildcards, so copy to a clean name.
+    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+        tmp_path = tmp.name
+    shutil.copy2(template_path, tmp_path)
+    try:
+        doc = Document(tmp_path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+
+    found = []
+    seen = set()
+
+    def scan(text):
+        for name in _PLACEHOLDER_RE.findall(text or ""):
+            clean = name.strip()
+            key = clean.lower()
+            if not clean or key == "file name" or key in seen:
+                continue
+            seen.add(key)
+            found.append(clean)
+
+    def scan_paragraphs(paragraphs):
+        for para in paragraphs:
+            scan("".join(r.text or "" for r in para.runs))
+
+    scan_paragraphs(doc.paragraphs)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                scan_paragraphs(cell.paragraphs)
+    for section in doc.sections:
+        scan_paragraphs(section.header.paragraphs)
+        scan_paragraphs(section.footer.paragraphs)
+    return found
+
 
 def _replace_in_paragraph(para, replacements):
     """

@@ -40,6 +40,47 @@ def _load_create_folders():
     return _load_engine("create_folders")
 
 
+# ── OPEN FOLDER (cross-platform) ──────────────────────────────────────────────
+
+def open_folder(path):
+    """Open a folder in the OS file browser. Best-effort, never raises."""
+    try:
+        if not path:
+            return
+        os.makedirs(path, exist_ok=True)
+        if sys.platform.startswith("win"):
+            os.startfile(path)              # noqa: only exists on Windows
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+    except Exception:
+        pass
+
+
+# ── SETTINGS (remember last-used options between launches) ─────────────────────
+
+SETTINGS_PATH = os.path.join(SCRIPT_DIR, "settings.json")
+
+
+def load_settings():
+    try:
+        import json
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_settings(data):
+    try:
+        import json
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
 # ── DEPENDENCY CHECK ──────────────────────────────────────────────────────────
 
 def check_and_install_packages():
@@ -152,6 +193,7 @@ def _build_app(base_class, has_dnd):
         def __init__(self):
             super().__init__()
             self._has_dnd = has_dnd
+            self._settings = load_settings()   # remembered options from last launch
             self.title("Kumulus Partners — PDF Tools")
             self.geometry("980x780")
             self.minsize(880, 700)
@@ -415,6 +457,28 @@ def _build_app(base_class, has_dnd):
                        width=5, command=toggle).pack(side="left", padx=(6, 0))
             return entry
 
+        def _open_output_button(self, parent, path_getter):
+            """A ghost button that opens the tool's output folder in Explorer."""
+            return ttk.Button(
+                parent, text="📂  Open output folder", style="Ghost.TButton",
+                command=lambda: open_folder(path_getter()))
+
+        def _persist_settings(self):
+            """Remember the options that are annoying to re-set each launch."""
+            data = dict(self._settings)
+            for key, getter in (
+                ("wm_size",        lambda: self._wm_size_var.get()),
+                ("wp_strip_index", lambda: bool(self._wp_strip_index.get())),
+                ("wp_recurse",     lambda: bool(self._wp_recurse.get())),
+                ("ft_to_pdf",      lambda: bool(self._ft_pdf_var.get())),
+            ):
+                try:
+                    data[key] = getter()
+                except Exception:
+                    pass
+            self._settings = data
+            save_settings(data)
+
         def _check_output_folder(self):
             if not os.path.isdir(OUTPUT_FOLDER):
                 return True
@@ -585,7 +649,8 @@ def _build_app(base_class, has_dnd):
                      bg=C["bg"], fg=C["text"], font=(FF, 9)
                      ).pack(side="left")
 
-            self._wm_size_var = tk.StringVar(value="72")
+            self._wm_size_var = tk.StringVar(
+                value=str(self._settings.get("wm_size", "72")))
             size_combo = ttk.Combobox(
                 settings_row, textvariable=self._wm_size_var,
                 values=["48", "60", "72", "84", "92", "108"],
@@ -616,6 +681,9 @@ def _build_app(base_class, has_dnd):
             tk.Label(row2, textvariable=self._wm_status,
                      bg=C["bg"], fg=C["sub"], font=(FF, 9)
                      ).pack(side="left", padx=16)
+
+            self._open_output_button(
+                row2, lambda: OUTPUT_FOLDER).pack(side="right")
 
             # ── Row 3: log card ──
             card_log = self._card(frame)
@@ -720,6 +788,7 @@ def _build_app(base_class, has_dnd):
             self._wm_log.delete("1.0", "end")
             self._wm_log.configure(state="disabled")
 
+            self._persist_settings()
             threading.Thread(
                 target=self._wm_execute, args=(names, pw, view_pw, font_size), daemon=True
             ).start()
@@ -857,6 +926,8 @@ def _build_app(base_class, has_dnd):
             tk.Label(row2, textvariable=self._rp_status,
                      bg=C["bg"], fg=C["sub"], font=(FF, 9)
                      ).pack(side="left", padx=16)
+
+            self._open_output_button(row2, lambda: OUTPUT_FOLDER).pack(side="right")
 
             # Log
             card_log = self._card(frame)
@@ -1034,6 +1105,8 @@ def _build_app(base_class, has_dnd):
                      bg=C["bg"], fg=C["sub"], font=(FF, 9)
                      ).pack(side="left", padx=16)
 
+            self._open_output_button(row2, lambda: OUTPUT_FOLDER).pack(side="right")
+
             # ── Row 3: log ──
             card_log = self._card(frame)
             card_log.pack(fill="both", expand=True)
@@ -1161,7 +1234,8 @@ def _build_app(base_class, has_dnd):
 
             pdf_row = tk.Frame(card_tpl, bg=C["panel"])
             pdf_row.pack(fill="x", padx=16, pady=(8, 14))
-            self._ft_pdf_var = tk.BooleanVar(value=False)
+            self._ft_pdf_var = tk.BooleanVar(
+                value=bool(self._settings.get("ft_to_pdf", False)))
             tk.Checkbutton(pdf_row,
                            text="Also export as PDF  (requires Microsoft Word)",
                            variable=self._ft_pdf_var,
@@ -1175,7 +1249,7 @@ def _build_app(base_class, has_dnd):
             card_ph = self._card(row1)
             card_ph.pack(side="left", fill="both", expand=True)
             self._card_header(card_ph, "Placeholders",
-                              "One name per line — must match [name] tags in the template exactly")
+                              "Auto-filled from the template when you pick one — one [name] per line")
 
             self._ft_ph_text = scrolledtext.ScrolledText(
                 card_ph, height=7, font=("Consolas", 10),
@@ -1185,10 +1259,15 @@ def _build_app(base_class, has_dnd):
             )
             self._ft_ph_text.pack(fill="both", expand=True, padx=16, pady=(10, 6))
 
-            tk.Label(card_ph,
-                     text="e.g.  address  ·  contact  ·  date   (no brackets, one per line)",
+            ph_foot = tk.Frame(card_ph, bg=C["panel"])
+            ph_foot.pack(fill="x", padx=16, pady=(0, 12))
+            ttk.Button(ph_foot, text="Detect from template",
+                       style="Ghost.TButton",
+                       command=self._ft_detect_placeholders).pack(side="left")
+            tk.Label(ph_foot,
+                     text="no brackets, one per line",
                      bg=C["panel"], fg=C["sub"], font=(FF, 8)
-                     ).pack(anchor="w", padx=16, pady=(0, 12))
+                     ).pack(side="left", padx=(10, 0))
 
             # ── Row 2: two-step action bar ──
             row2 = tk.Frame(frame, bg=C["bg"])
@@ -1218,6 +1297,8 @@ def _build_app(base_class, has_dnd):
                      bg=C["bg"], fg=C["sub"], font=(FF, 9)
                      ).pack(side="left", padx=16)
 
+            self._open_output_button(row2, lambda: OUTPUT_FOLDER).pack(side="right")
+
             # ── Row 3: log ──
             card_log = self._card(frame)
             card_log.pack(fill="both", expand=True)
@@ -1234,6 +1315,37 @@ def _build_app(base_class, has_dnd):
             if path:
                 self._ft_tpl_path = path
                 self._ft_tpl_var.set(f"✓  {os.path.basename(path)}")
+                # Auto-detect [placeholder] tags, but never clobber names the
+                # user has already typed in.
+                if not self._ft_ph_text.get("1.0", "end").strip():
+                    self._ft_detect_placeholders(announce=False)
+
+        def _ft_detect_placeholders(self, announce=True):
+            """Read the chosen template and fill the placeholder box with its [tags]."""
+            if not self._ft_tpl_path:
+                if announce:
+                    messagebox.showinfo("No template",
+                                        "Pick a Word template first, then detect.")
+                return
+            try:
+                ft = _load_engine("fill_template")
+                names = ft.detect_placeholders(self._ft_tpl_path)
+            except Exception as e:
+                if announce:
+                    messagebox.showwarning(
+                        "Could not read template",
+                        f"Placeholders could not be detected automatically.\n\n{e}")
+                return
+            if not names:
+                if announce:
+                    messagebox.showinfo(
+                        "No placeholders found",
+                        "No [placeholder] tags were found in this template.\n"
+                        "You can still type them in by hand.")
+                return
+            self._ft_ph_text.delete("1.0", "end")
+            self._ft_ph_text.insert("1.0", "\n".join(names))
+            self._ft_status.set(f"✓  {len(names)} placeholder(s) detected")
 
         def _ft_update_excel(self):
             raw   = self._ft_ph_text.get("1.0", "end")
@@ -1289,6 +1401,7 @@ def _build_app(base_class, has_dnd):
                 return
 
             to_pdf = self._ft_pdf_var.get()
+            self._persist_settings()
 
             self._ft_run_btn.configure(state="disabled")
             self._ft_bar.pack(side="left", padx=(14, 0))
@@ -1420,6 +1533,8 @@ def _build_app(base_class, has_dnd):
             tk.Label(row2, textvariable=self._ap_status,
                      bg=C["bg"], fg=C["sub"], font=(FF, 9)
                      ).pack(side="left", padx=16)
+
+            self._open_output_button(row2, lambda: OUTPUT_FOLDER).pack(side="right")
 
             # ── Row 3: log ──
             card_log = self._card(frame)
@@ -1573,6 +1688,7 @@ def _build_app(base_class, has_dnd):
 
             self._wp_files = []
             self._wp_folder = None   # set when a whole folder is chosen
+            self._wp_last_out = None  # last folder PDFs were written to
             self._wp_files_var = tk.StringVar(
                 value="Drop files here  ·  or use Browse below")
             wp_zone, self._wp_zone_lbl = self._dropzone(
@@ -1592,7 +1708,8 @@ def _build_app(base_class, has_dnd):
             # ── Options row ──
             opt_row = tk.Frame(frame, bg=C["bg"])
             opt_row.pack(fill="x", pady=(0, 10))
-            self._wp_strip_index = tk.BooleanVar(value=True)
+            self._wp_strip_index = tk.BooleanVar(
+                value=bool(self._settings.get("wp_strip_index", True)))
             tk.Checkbutton(
                 opt_row,
                 text="Remove dataroom index numbers from names   "
@@ -1602,6 +1719,16 @@ def _build_app(base_class, has_dnd):
                 activebackground=C["bg"], activeforeground=C["text"],
                 selectcolor=C["panel"], font=(FF, 9), cursor="hand2",
             ).pack(anchor="w")
+            self._wp_recurse = tk.BooleanVar(
+                value=bool(self._settings.get("wp_recurse", False)))
+            tk.Checkbutton(
+                opt_row,
+                text="Include subfolders when a folder is selected",
+                variable=self._wp_recurse,
+                bg=C["bg"], fg=C["text"],
+                activebackground=C["bg"], activeforeground=C["text"],
+                selectcolor=C["panel"], font=(FF, 9), cursor="hand2",
+            ).pack(anchor="w", pady=(4, 0))
 
             # ── Row 2: action bar ──
             row2 = tk.Frame(frame, bg=C["bg"])
@@ -1621,6 +1748,9 @@ def _build_app(base_class, has_dnd):
             tk.Label(row2, textvariable=self._wp_status,
                      bg=C["bg"], fg=C["sub"], font=(FF, 9)
                      ).pack(side="left", padx=16)
+
+            self._open_output_button(
+                row2, lambda: self._wp_last_out).pack(side="right")
 
             # ── Row 3: log ──
             card_log = self._card(frame)
@@ -1654,9 +1784,19 @@ def _build_app(base_class, has_dnd):
             folder = filedialog.askdirectory(title="Select folder to convert")
             if not folder:
                 return
-            files = [os.path.join(folder, f)
-                     for f in os.listdir(folder)
-                     if os.path.isfile(os.path.join(folder, f))]
+            out_sub = os.path.abspath(os.path.join(folder, "pdf"))
+            if self._wp_recurse.get():
+                files = []
+                for root, dirs, names in os.walk(folder):
+                    # never descend into our own pdf/ output folder
+                    dirs[:] = [d for d in dirs
+                               if os.path.abspath(os.path.join(root, d)) != out_sub]
+                    for n in names:
+                        files.append(os.path.join(root, n))
+            else:
+                files = [os.path.join(folder, f)
+                         for f in os.listdir(folder)
+                         if os.path.isfile(os.path.join(folder, f))]
             if not files:
                 messagebox.showwarning("Empty folder", "No files found in that folder.")
                 return
@@ -1684,6 +1824,11 @@ def _build_app(base_class, has_dnd):
             # "pdf" subfolder of it. For loose files, keep them next to source.
             out_dir = os.path.join(self._wp_folder, "pdf") if self._wp_folder else None
             strip_index = self._wp_strip_index.get()
+
+            # Remember where output goes so "Open output folder" works after the run.
+            self._wp_last_out = out_dir or (
+                os.path.dirname(self._wp_files[0]) if self._wp_files else None)
+            self._persist_settings()
 
             self._wp_run_btn.configure(state="disabled")
             self._wp_bar.pack(side="left", padx=(14, 0))
