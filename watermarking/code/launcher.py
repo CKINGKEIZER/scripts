@@ -1729,6 +1729,7 @@ def _build_app(base_class, has_dnd):
                 opt_row,
                 text="Include subfolders when a folder is selected",
                 variable=self._wp_recurse,
+                command=self._wp_on_recurse_toggle,
                 bg=C["bg"], fg=C["text"],
                 activebackground=C["bg"], activeforeground=C["text"],
                 selectcolor=C["panel"], font=(FF, 9), cursor="hand2",
@@ -1795,15 +1796,16 @@ def _build_app(base_class, has_dnd):
             if paths:
                 self._wp_set_files(list(paths))
 
-        def _wp_browse_folder(self):
-            folder = filedialog.askdirectory(title="Select folder to convert")
-            if not folder:
-                return
+        def _wp_collect_folder(self, folder):
+            """
+            List files in `folder`, honoring the current "Include subfolders"
+            setting. Always excludes our own _pdf output subfolder so re-runs
+            don't re-ingest previous output.
+            """
             out_sub = os.path.abspath(os.path.join(folder, PDF_SUBFOLDER))
+            files = []
             if self._wp_recurse.get():
-                files = []
                 for root, dirs, names in os.walk(folder):
-                    # never descend into our own pdf/ output folder
                     dirs[:] = [d for d in dirs
                                if os.path.abspath(os.path.join(root, d)) != out_sub]
                     for n in names:
@@ -1812,10 +1814,25 @@ def _build_app(base_class, has_dnd):
                 files = [os.path.join(folder, f)
                          for f in os.listdir(folder)
                          if os.path.isfile(os.path.join(folder, f))]
+            return files
+
+        def _wp_browse_folder(self):
+            folder = filedialog.askdirectory(title="Select folder to convert")
+            if not folder:
+                return
+            files = self._wp_collect_folder(folder)
             if not files:
                 messagebox.showwarning("Empty folder", "No files found in that folder.")
                 return
             self._wp_set_files(files, folder=folder)
+
+        def _wp_on_recurse_toggle(self):
+            # Re-scan the selected folder so ticking the box updates the count
+            # immediately (and the run uses the new setting either way).
+            if self._wp_folder:
+                files = self._wp_collect_folder(self._wp_folder)
+                if files:
+                    self._wp_set_files(files, folder=self._wp_folder)
 
         def _wp_set_files(self, paths, folder=None):
             self._wp_files  = paths
@@ -1831,6 +1848,12 @@ def _build_app(base_class, has_dnd):
         # ── Word to PDF: run ──────────────────────────────────────────────
 
         def _wp_run(self):
+            # If a folder was selected, re-scan it now so the current
+            # "Include subfolders" setting always wins, whatever the click order
+            # was (and so newly-added files in the folder are picked up).
+            if self._wp_folder:
+                self._wp_files = self._wp_collect_folder(self._wp_folder)
+
             if not self._wp_files:
                 messagebox.showwarning("No files", "Select at least one file.")
                 return
