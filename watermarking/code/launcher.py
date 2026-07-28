@@ -20,6 +20,9 @@ OUTPUT_FOLDER    = os.path.join(PARENT_DIR, "output")   # watermarking/output �
 BUYERS_EXCEL     = os.path.join(SCRIPT_DIR, "buyers.xlsx")
 WORD_EXCEL       = os.path.join(SCRIPT_DIR, "word_placeholder_excel.xlsx")
 
+# Convert-to-PDF output subfolder. Leading underscore keeps it sorted on top.
+PDF_SUBFOLDER    = "_pdf"
+
 
 # ── ENGINE LOADER ─────────────────────────────────────────────────────────────
 # Each tool's logic lives in its own module next to this file (add_passwords,
@@ -470,6 +473,7 @@ def _build_app(base_class, has_dnd):
                 ("wm_size",        lambda: self._wm_size_var.get()),
                 ("wp_strip_index", lambda: bool(self._wp_strip_index.get())),
                 ("wp_recurse",     lambda: bool(self._wp_recurse.get())),
+                ("wp_skip_pdfs",   lambda: bool(self._wp_skip_pdfs.get())),
                 ("ft_to_pdf",      lambda: bool(self._ft_pdf_var.get())),
             ):
                 try:
@@ -1729,6 +1733,17 @@ def _build_app(base_class, has_dnd):
                 activebackground=C["bg"], activeforeground=C["text"],
                 selectcolor=C["panel"], font=(FF, 9), cursor="hand2",
             ).pack(anchor="w", pady=(4, 0))
+            self._wp_skip_pdfs = tk.BooleanVar(
+                value=bool(self._settings.get("wp_skip_pdfs", False)))
+            tk.Checkbutton(
+                opt_row,
+                text="Skip existing PDFs  (only the converted files go to the "
+                     f"{PDF_SUBFOLDER} folder)",
+                variable=self._wp_skip_pdfs,
+                bg=C["bg"], fg=C["text"],
+                activebackground=C["bg"], activeforeground=C["text"],
+                selectcolor=C["panel"], font=(FF, 9), cursor="hand2",
+            ).pack(anchor="w", pady=(4, 0))
 
             # ── Row 2: action bar ──
             row2 = tk.Frame(frame, bg=C["bg"])
@@ -1784,7 +1799,7 @@ def _build_app(base_class, has_dnd):
             folder = filedialog.askdirectory(title="Select folder to convert")
             if not folder:
                 return
-            out_sub = os.path.abspath(os.path.join(folder, "pdf"))
+            out_sub = os.path.abspath(os.path.join(folder, PDF_SUBFOLDER))
             if self._wp_recurse.get():
                 files = []
                 for root, dirs, names in os.walk(folder):
@@ -1807,7 +1822,7 @@ def _build_app(base_class, has_dnd):
             self._wp_folder = folder
             if folder:
                 self._wp_files_var.set(
-                    f"✓  {len(paths)} file(s)  ·  PDFs → {os.path.basename(folder)}\\pdf")
+                    f"✓  {len(paths)} file(s)  ·  PDFs → {os.path.basename(folder)}\\{PDF_SUBFOLDER}")
             else:
                 self._wp_files_var.set(
                     f"✓  {len(paths)} file(s)  ·  PDFs saved next to each source")
@@ -1821,9 +1836,10 @@ def _build_app(base_class, has_dnd):
                 return
 
             # When a whole folder was chosen, write the PDFs into a clean
-            # "pdf" subfolder of it. For loose files, keep them next to source.
-            out_dir = os.path.join(self._wp_folder, "pdf") if self._wp_folder else None
+            # "_pdf" subfolder of it. For loose files, keep them next to source.
+            out_dir = os.path.join(self._wp_folder, PDF_SUBFOLDER) if self._wp_folder else None
             strip_index = self._wp_strip_index.get()
+            skip_pdfs   = self._wp_skip_pdfs.get()
 
             # Remember where output goes so "Open output folder" works after the run.
             self._wp_last_out = out_dir or (
@@ -1840,11 +1856,11 @@ def _build_app(base_class, has_dnd):
 
             threading.Thread(
                 target=self._wp_execute,
-                args=(list(self._wp_files), out_dir, strip_index),
+                args=(list(self._wp_files), out_dir, strip_index, skip_pdfs),
                 daemon=True
             ).start()
 
-        def _wp_execute(self, files, out_dir, strip_index):
+        def _wp_execute(self, files, out_dir, strip_index, skip_pdfs):
             def log(msg):
                 self.after(0, lambda m=msg: self._log_write(self._wp_log, m))
 
@@ -1853,17 +1869,20 @@ def _build_app(base_class, has_dnd):
 
             try:
                 w2p = _load_engine("word_to_pdf")
-                # out_dir set -> a "pdf" subfolder; None -> next to each source file.
+                # out_dir set -> the _pdf subfolder; None -> next to each source file.
                 if out_dir:
                     log(f"  Output folder: {out_dir}")
                 if strip_index:
                     log("  Removing dataroom index numbers from output names")
+                if skip_pdfs:
+                    log("  Skipping existing PDFs (only converted files go to output)")
                 done, skipped, failed = w2p.run_batch(
-                    files, out_dir, log, progress, strip_index=strip_index)
+                    files, out_dir, log, progress,
+                    strip_index=strip_index, skip_existing_pdfs=skip_pdfs)
                 log("")
                 log(f"  Finished: {done} converted, {skipped} skipped, {len(failed)} failed.")
                 summary = f"{done} converted, {skipped} skipped, {len(failed)} failed."
-                where = ("in the 'pdf' subfolder"
+                where = (f"in the '{PDF_SUBFOLDER}' subfolder"
                          if out_dir else "next to each source file")
 
                 if failed:
