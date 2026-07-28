@@ -474,6 +474,7 @@ def _build_app(base_class, has_dnd):
                 ("wp_strip_index", lambda: bool(self._wp_strip_index.get())),
                 ("wp_recurse",     lambda: bool(self._wp_recurse.get())),
                 ("wp_skip_pdfs",   lambda: bool(self._wp_skip_pdfs.get())),
+                ("wp_high_quality", lambda: bool(self._wp_hq.get())),
                 ("ft_to_pdf",      lambda: bool(self._ft_pdf_var.get())),
             ):
                 try:
@@ -1745,6 +1746,17 @@ def _build_app(base_class, has_dnd):
                 activebackground=C["bg"], activeforeground=C["text"],
                 selectcolor=C["panel"], font=(FF, 9), cursor="hand2",
             ).pack(anchor="w", pady=(4, 0))
+            self._wp_hq = tk.BooleanVar(
+                value=bool(self._settings.get("wp_high_quality", False)))
+            tk.Checkbutton(
+                opt_row,
+                text="High quality  (300 DPI — sharper images/scans, larger & slower; "
+                     "no effect on Word/Excel/PowerPoint)",
+                variable=self._wp_hq,
+                bg=C["bg"], fg=C["text"],
+                activebackground=C["bg"], activeforeground=C["text"],
+                selectcolor=C["panel"], font=(FF, 9), cursor="hand2",
+            ).pack(anchor="w", pady=(4, 0))
 
             # ── Row 2: action bar ──
             row2 = tk.Frame(frame, bg=C["bg"])
@@ -1863,6 +1875,7 @@ def _build_app(base_class, has_dnd):
             out_dir = os.path.join(self._wp_folder, PDF_SUBFOLDER) if self._wp_folder else None
             strip_index = self._wp_strip_index.get()
             skip_pdfs   = self._wp_skip_pdfs.get()
+            high_quality = self._wp_hq.get()
 
             # Remember where output goes so "Open output folder" works after the run.
             self._wp_last_out = out_dir or (
@@ -1879,11 +1892,11 @@ def _build_app(base_class, has_dnd):
 
             threading.Thread(
                 target=self._wp_execute,
-                args=(list(self._wp_files), out_dir, strip_index, skip_pdfs),
+                args=(list(self._wp_files), out_dir, strip_index, skip_pdfs, high_quality),
                 daemon=True
             ).start()
 
-        def _wp_execute(self, files, out_dir, strip_index, skip_pdfs):
+        def _wp_execute(self, files, out_dir, strip_index, skip_pdfs, high_quality):
             def log(msg):
                 self.after(0, lambda m=msg: self._log_write(self._wp_log, m))
 
@@ -1899,9 +1912,12 @@ def _build_app(base_class, has_dnd):
                     log("  Removing dataroom index numbers from output names")
                 if skip_pdfs:
                     log("  Skipping existing PDFs (only converted files go to output)")
+                if high_quality:
+                    log("  High quality: images/scans at 300 DPI")
                 done, skipped, failed = w2p.run_batch(
                     files, out_dir, log, progress,
-                    strip_index=strip_index, skip_existing_pdfs=skip_pdfs)
+                    strip_index=strip_index, skip_existing_pdfs=skip_pdfs,
+                    high_quality=high_quality)
                 log("")
                 log(f"  Finished: {done} converted, {skipped} skipped, {len(failed)} failed.")
                 summary = f"{done} converted, {skipped} skipped, {len(failed)} failed."

@@ -81,8 +81,14 @@ def read_text_file(path):
 
 # ── NON-OFFICE CONVERTERS ─────────────────────────────────────────────────────
 
-def convert_image(src, pdf):
-    """Embed an image at full resolution, one page. Flatten transparency onto white."""
+def convert_image(src, pdf, high_quality=False):
+    """
+    Embed an image at full resolution, one page. Flatten transparency onto white.
+
+    high_quality : keep every pixel with near-lossless compression at 300 DPI
+                   (sharper scans/photos, larger files). Otherwise 150 DPI with
+                   normal compression.
+    """
     from PIL import Image
     im = Image.open(src)
     try:
@@ -96,7 +102,10 @@ def convert_image(src, pdf):
         im = bg
     else:
         im = im.convert("RGB")
-    im.save(pdf, "PDF", resolution=150.0)
+    if high_quality:
+        im.save(pdf, "PDF", resolution=300.0, quality=100)
+    else:
+        im.save(pdf, "PDF", resolution=150.0)
 
 
 def convert_text(src, pdf):
@@ -270,13 +279,13 @@ def convert_outlook(apps, src, pdf):
 
 # ── DISPATCH ──────────────────────────────────────────────────────────────────
 
-def convert_one(apps, src, pdf, log):
+def convert_one(apps, src, pdf, log, high_quality=False):
     """Route a single file. Returns True on success."""
     ext = os.path.splitext(src)[1].lower()
     kind = route(ext)
 
     if kind == "image":
-        convert_image(src, pdf)
+        convert_image(src, pdf, high_quality=high_quality)
         return True
     if kind == "text":
         return convert_text(src, pdf)
@@ -348,7 +357,7 @@ def pdf_output_path(src, out_dir, strip_index=False):
 # ── BATCH RUNNER ──────────────────────────────────────────────────────────────
 
 def run_batch(files, out_dir, log, progress=None, strip_index=False,
-              skip_existing_pdfs=False):
+              skip_existing_pdfs=False, high_quality=False):
     """
     Convert every file in `files`. Office apps are opened once and reused.
 
@@ -358,6 +367,10 @@ def run_batch(files, out_dir, log, progress=None, strip_index=False,
     skip_existing_pdfs : when True, files that are already PDFs are left in
                          place (not copied/moved into the output folder), so
                          only the freshly converted files end up there.
+    high_quality       : when True, images/scans are embedded at 300 DPI with
+                         near-lossless compression (larger, slower). Vector
+                         formats (Word/Excel/PowerPoint/text) are unaffected —
+                         they are already resolution-independent.
 
     Returns (done, skipped, failed_list).
     """
@@ -426,7 +439,7 @@ def run_batch(files, out_dir, log, progress=None, strip_index=False,
 
             pdf = claim(pdf_output_path(src, out_dir, strip_index))
             try:
-                ok = convert_one(apps, src, pdf, log)
+                ok = convert_one(apps, src, pdf, log, high_quality=high_quality)
                 if ok:
                     log(f"  [{i}/{total}] ok    {name}  ->  {os.path.basename(pdf)}")
                     done += 1
@@ -457,11 +470,13 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     strip_index = "--strip-index" in sys.argv
     skip_pdfs   = "--skip-pdfs" in sys.argv
+    high_quality = "--hq" in sys.argv
     if not args:
-        print("Usage: python word_to_pdf.py [--strip-index] [--skip-pdfs] <file-or-folder> [more ...]")
+        print("Usage: python word_to_pdf.py [--strip-index] [--skip-pdfs] [--hq] <file-or-folder> [more ...]")
         print("Converts Word/Excel/PowerPoint/images/text/Outlook files to PDF.")
         print("  --strip-index  remove leading dataroom index numbers from output names")
         print("  --skip-pdfs    leave existing PDFs in place (only converted files)")
+        print("  --hq           high quality for images/scans (300 DPI, larger files)")
         return
     files = []
     for a in args:
@@ -475,7 +490,8 @@ def main():
     print("Converting %d file(s)...\n" % len(files))
     done, skipped, failed = run_batch(files, None, print,
                                       strip_index=strip_index,
-                                      skip_existing_pdfs=skip_pdfs)
+                                      skip_existing_pdfs=skip_pdfs,
+                                      high_quality=high_quality)
     print("\nDone. %d converted, %d skipped, %d failed." % (done, skipped, len(failed)))
 
 
