@@ -347,17 +347,24 @@ def pdf_output_path(src, out_dir, strip_index=False):
 
 # ── BATCH RUNNER ──────────────────────────────────────────────────────────────
 
-def run_batch(files, out_dir, log, progress=None, strip_index=False):
+def run_batch(files, out_dir, log, progress=None, strip_index=False,
+              skip_existing_pdfs=False):
     """
     Convert every file in `files`. Office apps are opened once and reused.
 
-    strip_index : when True, a leading dataroom index number is removed from
-                  each output filename ("1.1.8.2.12 Name.pdf" -> "Name.pdf").
+    strip_index        : when True, a leading dataroom index number is removed
+                         from each output filename ("1.1.8.2.12 Name.pdf" ->
+                         "Name.pdf").
+    skip_existing_pdfs : when True, files that are already PDFs are left in
+                         place (not copied/moved into the output folder), so
+                         only the freshly converted files end up there.
 
     Returns (done, skipped, failed_list).
     """
     import pythoncom
     pythoncom.CoInitialize()
+
+    out_name = os.path.basename(out_dir.rstrip("/\\")) if out_dir else ""
 
     apps = OfficeApps(log)
 
@@ -388,27 +395,28 @@ def run_batch(files, out_dir, log, progress=None, strip_index=False):
             name = os.path.basename(src)
             ext = os.path.splitext(src)[1].lower()
             if ext == ".pdf":
-                # No output folder (loose files) -> nothing to tidy, leave it.
-                if not out_dir:
-                    log(f"  [{i}/{total}] skip (already PDF)  {name}")
+                # No output folder (loose files), or the user asked to skip
+                # existing PDFs -> leave the file where it is.
+                if not out_dir or skip_existing_pdfs:
+                    log(f"  [{i}/{total}] skip (existing PDF)  {name}")
                     skipped += 1
                     if progress: progress(i, total)
                     continue
-                # Folder run: move the existing PDF into the pdf/ subfolder too
+                # Folder run: move the existing PDF into the output subfolder too
                 # (with its index stripped), so the source folder ends up clean.
                 dest = pdf_output_path(src, out_dir, strip_index)
                 if os.path.abspath(src) == os.path.abspath(dest):
                     log(f"  [{i}/{total}] already in output  {name}")
                     skipped += 1
                 elif dest in used or os.path.exists(dest):
-                    log(f"  [{i}/{total}] skip (name already in pdf/)  {name}")
+                    log(f"  [{i}/{total}] skip (name already in {out_name}/)  {name}")
                     skipped += 1
                 else:
                     try:
                         import shutil
                         used.add(dest)
                         shutil.move(src, dest)
-                        log(f"  [{i}/{total}] moved (already PDF)  {name}  ->  pdf/{os.path.basename(dest)}")
+                        log(f"  [{i}/{total}] moved (already PDF)  {name}  ->  {out_name}/{os.path.basename(dest)}")
                         done += 1
                     except Exception as e:
                         log(f"  [{i}/{total}] FAIL  {name}  :  {e}")
@@ -448,10 +456,12 @@ def main():
     """Convert files/folders passed on the command line. GUI lives in launcher.py."""
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     strip_index = "--strip-index" in sys.argv
+    skip_pdfs   = "--skip-pdfs" in sys.argv
     if not args:
-        print("Usage: python word_to_pdf.py [--strip-index] <file-or-folder> [more ...]")
+        print("Usage: python word_to_pdf.py [--strip-index] [--skip-pdfs] <file-or-folder> [more ...]")
         print("Converts Word/Excel/PowerPoint/images/text/Outlook files to PDF.")
         print("  --strip-index  remove leading dataroom index numbers from output names")
+        print("  --skip-pdfs    leave existing PDFs in place (only converted files)")
         return
     files = []
     for a in args:
@@ -463,7 +473,9 @@ def main():
         print("No files found.")
         return
     print("Converting %d file(s)...\n" % len(files))
-    done, skipped, failed = run_batch(files, None, print, strip_index=strip_index)
+    done, skipped, failed = run_batch(files, None, print,
+                                      strip_index=strip_index,
+                                      skip_existing_pdfs=skip_pdfs)
     print("\nDone. %d converted, %d skipped, %d failed." % (done, skipped, len(failed)))
 
 
